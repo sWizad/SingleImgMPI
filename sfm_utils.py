@@ -109,7 +109,7 @@ def readCameraColmap(path, new_height, new_width):
 
 def readCameraDeepview(path, new_height, new_width):
     camera = {}
-    pp = [1, 5, 2, 6, 11, 15, 10, 14, 9, 4, 8, 3, 7, 12, 16, 13]
+    #pp = [1, 5, 2, 6, 11, 15, 10, 14, 9, 4, 8, 3, 7, 12, 16, 13]
     c=0
     with open(path +'models.json', "r") as fi:
       js = json.load(fi)
@@ -141,7 +141,7 @@ def readCameraDeepview(path, new_height, new_width):
 
               s = '-'
               #camera[s.join(['time%02d' % (i), cam_info['relative_path'].split('/')[0]])] = sfm
-              camera['time%02d-cam_%02d' % (i,pp[j])] = sfm
+              camera['time%02d-cam_%02d' % (i,j)] = sfm
               #print(i,j,cam_info['relative_path'].split('/')[0])
               #c =c+1
               #if c==3:    exit()
@@ -259,7 +259,7 @@ class SfMData:
     self.opy = float(js["intrinsics"][0]["principalPoint"][1])
     self.ow = int(js["intrinsics"][0]["width"])
     self.oh = int(js["intrinsics"][0]["height"])
-
+ 
     st = 0
     if ref_txt != "":
       fi = open("datasets/" + dataset + "/" + ref_txt, "r")
