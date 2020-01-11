@@ -1,1 +1,1 @@
-# SingleImgMPI
+# Single Image MPI
