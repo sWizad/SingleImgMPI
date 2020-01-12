@@ -143,9 +143,12 @@ def generateDeepview():
       im0 = tf.compat.v1.placeholder(dtype=tf.uint8)
       encoded0 = tf.image.encode_png(im0)
       with tf.compat.v1.Session() as sess:
-        pp = [7,0,1,6,10,9,8,    6,1,2,5,11,10,7,     5,2,3,4,12,11,6]
-        pp += [11,6,5,12,13,14,     10,7,6,11,14,15,9]
-        pp += [6,0,3,4,13,15,8]
+        #pp = [7,0,1,6,10,9,8,]
+        #pp +=[6,1,2,5,11,10,7,]
+        #pp =  [5,2,3,4,12,11,6]
+        #pp += [11,6,5,12,13,14,     10,7,6,11,14,15,9]
+        #pp += [6,0,3,4,13,15,8]
+        pp = [i for i in range(16)]
 
         for i0 in range(6):
           for p in pp:
@@ -192,6 +195,11 @@ def generateDeepview():
             'principalPoint1':f1(ref_py)
           }))
         tfrecord_writer.write(example.SerializeToString())
+
+  if False:
+    file1 = open("/home2/suttisak/datasets/spaces_dataset/data/resize_800/"+ FLAGS.dataset +"/planes.txt","w")
+    file1.write("1.0 20.0\n")
+    file1.close
 
 if __name__ == "__main__":
 

@@ -160,7 +160,7 @@ class SfMData:
 
     if self.dmin < 0 or self.dmax < 0:
       #with open("/home/heisenberg/dataset/" + dataset + "/planes.txt", "r") as fi:
-      with open("/dataset/" + dataset + "/planes.txt", "r") as fi:
+      with open("/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/planes.txt", "r") as fi:
         self.dmin, self.dmax = [float(x) for x in fi.readline().split(" ")]
 
     #self.w = int(self.ow * scale)
@@ -204,6 +204,7 @@ class SfMData:
       found = 0
       for name, cam_info in camera.items():
           if ref_img in name:
+              self.ref_img = plt.imread(path1 + name+".png")
               self.ref_r = cam_info['r'].astype(np.float32)
               self.ref_t = cam_info['t'].astype(np.float32)
               self.ref_fx = cam_info['fx']

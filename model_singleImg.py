@@ -42,12 +42,44 @@ sub_sam = max(FLAGS.sublayers,1)
 num_mpi = FLAGS.layers
 offset = FLAGS.offset
 dmin, dmax = -1,-1#0.2,15
+max_step = 2
+
+
+
+def inv_ref(sfm):
+    iwarp = InvzHomoWarp(sfm, sfm.features, sfm.features)
+    img_tile = cv2.resize(sfm.ref_img,(int(sfm.ow*FLAGS.scale),int(sfm.oh*FLAGS.scale)))
+    img_tile = tf.expand_dims(img_tile,0)
+    img_tile = tf.tile(img_tile,[num_mpi*sub_sam,1,1,1])
+    img_tile = -tf.math.log(tf.maximum(1/img_tile-1,0.006))
+    elem = tf.contrib.resampler.resampler(img_tile,iwarp)
+    #exit()
+    return elem
+    
+def UNet(input,depth=3):
+  next = input
+  chanels = [8*2**i for i in range(depth)]
+  layer = []
+  for i,c in enumerate(chanels):
+    next = lrelu(conv2d(next,c,name="downA"+str(i)))
+    next = lrelu(conv2d(next,c,stride=[1,2,2,1],name="downB"+str(i)))
+    layer.append(next)
+
+  next = lrelu(conv2d(next,chanels[-1],name="mid"))
+  for i,c in enumerate(reversed(chanels)):
+    next = tf.concat([next,layer[depth-1-i]],-1)
+    next = lrelu(conv2d(next,c,name="up"+str(i)))
+    next = upscale2d(next)
+
+  last = conv2d(next,6,name="clast")
+  return last
 
 def train_MPI(sfm):
     iter = tf.compat.v1.placeholder(tf.float32, shape=[], name='iter')
     lod_in = tf.compat.v1.placeholder(tf.float32, shape=[], name='lod_in')
-    
+    print(getPlanes(sfm))
     features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
+
     real_img = features0['img']
 
     bh = sfm.h + 2 * offset
@@ -71,13 +103,16 @@ def train_MPI(sfm):
 
     tt = True
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
-      mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt)   
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
-      last_al = tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
-      mpia += last_al * tf.maximum(1-iter/1500,0)
-      new_mpi = tf.concat([tf.tile(mpic,[sub_sam,1,1,1]),mpia],-1)
+      #last_al = tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
+      #mpia += last_al * tf.maximum(1-iter/100,0)
+    
+    mpic = inv_ref(sfm)
+    new_mpi = tf.concat([mpic,mpia],-1)
+    
 
-    lr = tf.compat.v1.train.exponential_decay(0.1,iter,1000,0.2)
+    #lr = tf.compat.v1.train.exponential_decay(0.1,iter,1000,0.2)
+    lr = 0.00015
     optimizer = tf.compat.v1.train.AdamOptimizer(lr)
     fac = 1.0#(1 - iter/(1500*2))# *0.01
     tva = tf.constant(0.1) * fac #*0.01
@@ -85,17 +120,24 @@ def train_MPI(sfm):
 
     mpi_sig = tf.sigmoid(new_mpi)
     img_out = network( sfm, features0, sfm.features, mpi_sig, center)
-
-    #img_tile = tf.tile(tf.concat([real_img[0:1],img_out],-1),[num_mpi*sub_sam,1,1,1])
-    #img_tile = tf.contrib.resampler.resampler(img_tile,InvzHomoWarp(sfm,features0,sfm.features))
-    #step_img = tf.reshape(img_tile,(1,num_mpi*sub_sam*bh,bw,6))
-
-    loss = 0
-    loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
-    loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
-    loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
-    train_op = slim.learning.create_train_op(loss,optimizer)
-
+    img_list = [img_out]
+    train_list = []
+    for i in range(max_step):
+      with tf.compat.v1.variable_scope("step"+str(i)):
+        delta = UNet(tf.concat([mpic,mpic[:,:,:,:3]*mpi_sig[:,:,:,3:4]],-1),3)
+        if i == 0: mpic = tf.concat([mpic,tf.zeros_like(mpic)],-1)
+        mpic = mpic + delta
+        new_mpi = tf.concat([mpic[:,:,:,:3],mpia],-1)
+        mpi_sig = tf.sigmoid(new_mpi)
+        img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+        img_list.append(img_out)
+        loss = 0
+        loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
+        loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
+        loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
+        train_op = slim.learning.create_train_op(loss,optimizer)
+        train_list.append(train_op)
+    step_img = tf.concat(img_list, 1)
 
 
     image_out = tf.clip_by_value(img_out,0.0,1.0)
@@ -104,9 +146,11 @@ def train_MPI(sfm):
     summary = tf.compat.v1.summary.merge([
                 tf.compat.v1.summary.scalar("post0/all_loss", loss),
                 #tf.compat.v1.summary.image("post1/out0",step_img[:,:,:,:3]),
+                tf.compat.v1.summary.image("post0/step",step_img),
                 tf.compat.v1.summary.image("post0/out1",tf.concat([real_img[-1:],image_out],1)),
                 tf.compat.v1.summary.image("post1/o_alpha",a_long),
-                tf.compat.v1.summary.image("post1/o_color",c_long*a_long),
+                tf.compat.v1.summary.image("post1/o_color",c_long),
+                tf.compat.v1.summary.image("post1/oa_color",c_long*a_long),
                 ])
 
     config = ConfigProto()
@@ -135,6 +179,12 @@ def train_MPI(sfm):
     else:
       sess.run(tf.compat.v1.global_variables_initializer())
 
+    t_vars = slim.get_variables_to_restore()
+    var2restore = [var for var in t_vars if 'mpi' in var.name and 'Adam' not in var.name ]
+    saver = tf.train.Saver(var2restore)
+    saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
+
+
 
     localpp = './model/space/' + FLAGS.dataset 
     if not os.path.exists(localpp):
@@ -145,16 +195,19 @@ def train_MPI(sfm):
     los = 0
     for i in range(FLAGS.epoch + 3):
         feedlis = {iter:i}
-        _,los = sess.run([train_op,loss],feed_dict=feedlis)
-
+        #_,los = sess.run([train_op,loss],feed_dict=feedlis)
+        #los = sess.run(loss,feed_dict=feedlis)
+        for trainer in train_list:
+            _,los = sess.run([trainer,loss],feed_dict=feedlis)
+            
         if i%50==0:
             print(i, "loss = ",los )
         if i%20 == 0:
             summ = sess.run(summary,feed_dict=feedlis)
             writer.add_summary(summ,i)
-        if i%200==199:
-            saver.save(sess, localpp + '/' + str(000))
-    saver.save(sess, localpp + '/mpi')
+        #if i%200==199:
+        #    saver.save(sess, localpp + '/' + str(000))
+    #saver.save(sess, localpp + '/mpi')
 
 def predict(sfm):
     def parser(serialized_example):
