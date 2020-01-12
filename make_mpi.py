@@ -257,7 +257,7 @@ def train_MPI(sfm):
 
     config = ConfigProto()
     config.gpu_options.allow_growth = True
-    localpp = "TensorB/"+FLAGS.dataset+"_s%02d"%FLAGS.subscale
+    localpp = "TensorB/"+FLAGS.dataset
     if FLAGS.index==0:
       if os.path.exists(localpp):
         os.system("rm -rf " +localpp )
@@ -282,7 +282,7 @@ def train_MPI(sfm):
       sess.run(tf.compat.v1.global_variables_initializer())
 
 
-    localpp = './model/' + FLAGS.dataset +"/s%02d"%FLAGS.subscale
+    localpp = '/home2/suttisak/model/SingleImgMPI/' + FLAGS.dataset +"/s%02d"%FLAGS.subscale
     if not os.path.exists(localpp):
         os.makedirs(localpp)
     saver = tf.train.Saver()
