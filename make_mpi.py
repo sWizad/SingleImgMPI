@@ -30,8 +30,8 @@ tf.app.flags.DEFINE_float("scale", 0.75, "scale input image by")
 tf.app.flags.DEFINE_integer("offset", 16, "offset size to mpi")
 tf.app.flags.DEFINE_integer("subscale", 8, "downscale factor for the sub layer")
 
-tf.app.flags.DEFINE_integer("layers", 25, "number of planes")
-tf.app.flags.DEFINE_integer("sublayers", 2, "number of sub planes")
+tf.app.flags.DEFINE_integer("layers", 24, "number of planes")
+tf.app.flags.DEFINE_integer("sublayers", 1, "number of sub planes")
 tf.app.flags.DEFINE_integer("epoch", 2000, "Training steps")
 tf.app.flags.DEFINE_integer("batch_size", 1, "Size of mini-batch.")
 
@@ -272,7 +272,7 @@ def train_MPI(sfm):
     if not FLAGS.restart:
       sess.run(tf.compat.v1.global_variables_initializer())
       t_vars = slim.get_variables_to_restore()
-      localpp = './model/space/' + FLAGS.dataset +"/"
+      localpp = './model/space/' + FLAGS.dataset
       var2restore = [var for var in t_vars if 'Net0' in var.name ]
       print(var2restore)
       saver = tf.train.Saver(var2restore)
@@ -282,7 +282,7 @@ def train_MPI(sfm):
       sess.run(tf.compat.v1.global_variables_initializer())
 
 
-    localpp = './model/space/' + FLAGS.dataset +"/"
+    localpp = './model/space/' + FLAGS.dataset 
     if not os.path.exists(localpp):
         os.makedirs(localpp)
     saver = tf.train.Saver()
