@@ -194,7 +194,7 @@ class SfMData:
 
   def readDeepview(self, dataset, ref_img):
       #path1  = '/home/heisenberg/dataset/' + dataset +'/image/'
-      path1  = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/"
+      path1  = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/img/"
       resize_img = plt.imread(path1 + os.listdir(path1)[0])
       self.oh = resize_img.shape[0]
       self.ow = resize_img.shape[1]
