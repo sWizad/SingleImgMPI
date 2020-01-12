@@ -38,7 +38,7 @@ tf.app.flags.DEFINE_integer("batch_size", 1, "Size of mini-batch.")
 tf.app.flags.DEFINE_integer("index", 0, "index number")
 
 tf.app.flags.DEFINE_string("dataset", "temple0", "which dataset in the datasets folder")
-tf.app.flags.DEFINE_string("input", "cen0", "input tfrecord")
+tf.app.flags.DEFINE_string("input", "tem", "input tfrecord")
 tf.app.flags.DEFINE_string("ref_img", "01-cam_06", "reference image")
 
 #tf.app.flags.DEFINE_string("ref_img", "0051.png", "reference image such that MPI is perfectly parallel to")
@@ -210,7 +210,7 @@ def train_MPI(sfm):
 
     center = np.array([[[[0,0]]]])
 
-    mask = mask_maker(sfm,features0,sfm.features,center)
+    mask = mask_maker(sfm,features0,sfm.features)
 
     int_mpi1 = np.random.uniform(-1, 1,[num_mpi, bh, bw, 3]).astype(np.float32)
     int_mpi2 = np.random.uniform(-5,-3,[num_mpi*sub_sam, bh, bw, 1]).astype(np.float32)
@@ -272,7 +272,7 @@ def train_MPI(sfm):
     if not FLAGS.restart:
       sess.run(tf.compat.v1.global_variables_initializer())
       t_vars = slim.get_variables_to_restore()
-      localpp = '/home2/suttisak/model/SingleImgMPI/' + FLAGS.dataset +"/"
+      localpp = './model/space/' + FLAGS.dataset +"/"
       var2restore = [var for var in t_vars if 'Net0' in var.name ]
       print(var2restore)
       saver = tf.train.Saver(var2restore)
@@ -282,7 +282,7 @@ def train_MPI(sfm):
       sess.run(tf.compat.v1.global_variables_initializer())
 
 
-    localpp = '/home2/suttisak/model/SingleImgMPI/' + FLAGS.dataset +"/s%02d"%FLAGS.subscale
+    localpp = './model/space/' + FLAGS.dataset +"/"
     if not os.path.exists(localpp):
         os.makedirs(localpp)
     saver = tf.train.Saver()
