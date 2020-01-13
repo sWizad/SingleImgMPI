@@ -188,6 +188,8 @@ class SfMData:
     self.sw = 32*2#int(self.w/4)
     self.sh = 32*2#int(self.w/4)
 
+    self.ref_img = cv2.resize( self.ref_img ,(self.w,self.h))
+
     self.ref_k = np.array([[self.ref_fx * scale, 0, self.ref_px * scale],
     [0, self.ref_fy * scale, self.ref_py * scale],
     [0, 0, 1]])

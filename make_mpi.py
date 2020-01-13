@@ -60,6 +60,7 @@ def train_MPI(sfm):
 
     sfm.num_mpi = num_mpi
     sfm.offset = offset
+    print(getPlanes(sfm))
 
     center = np.array([[[[0,0]]]])
 
@@ -67,21 +68,27 @@ def train_MPI(sfm):
 
     int_mpi1 = np.random.uniform(-1, 1,[num_mpi, bh, bw, 3]).astype(np.float32)
     int_mpi2 = np.random.uniform(-5,-3,[num_mpi*sub_sam, bh, bw, 1]).astype(np.float32)
-    int_mpi3 = np.zeros([num_mpi*sub_sam, bh, bw, 4]).astype(np.float32)
+
+    ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
+    int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
+    int_mpi2[-1] = -1
+    
 
     tt = True
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
-      mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt)   
+      mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
       last_al = tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
-      mpia += last_al * tf.maximum(1-iter/1500,0)
+      mpia += last_al * tf.maximum(1-iter/500,0)
       new_mpi = tf.concat([tf.tile(mpic,[sub_sam,1,1,1]),mpia],-1)
+      tf.compat.v1.add_to_collection("mpia",mpia)
 
     lr = tf.compat.v1.train.exponential_decay(0.1,iter,1000,0.2)
     optimizer = tf.compat.v1.train.AdamOptimizer(lr)
-    fac = 1.0#(1 - iter/(1500*2))# *0.01
+
+    fac = tf.maximum(1 - iter/(1500),0)# *0.01
     tva = tf.constant(0.1) * fac #*0.01
-    tvc = tf.constant(0.005)  * fac #*2.0
+    tvc = tf.constant(0.005)  * fac *0.0
 
     mpi_sig = tf.sigmoid(new_mpi)
     img_out = network( sfm, features0, sfm.features, mpi_sig, center)
@@ -94,6 +101,8 @@ def train_MPI(sfm):
     loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
     loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
     loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
+    varmpi = [var for var in slim.get_variables_to_restore() if 'mpi_a' in var.name ]
+    train_op0 = slim.learning.create_train_op(loss,optimizer,variables_to_train=varmpi)
     train_op = slim.learning.create_train_op(loss,optimizer)
 
 
@@ -106,7 +115,7 @@ def train_MPI(sfm):
                 #tf.compat.v1.summary.image("post1/out0",step_img[:,:,:,:3]),
                 tf.compat.v1.summary.image("post0/out1",tf.concat([real_img[-1:],image_out],1)),
                 tf.compat.v1.summary.image("post1/o_alpha",a_long),
-                tf.compat.v1.summary.image("post1/o_color",c_long*a_long),
+                tf.compat.v1.summary.image("post1/o_color",c_long),
                 ])
 
     config = ConfigProto()
@@ -145,7 +154,10 @@ def train_MPI(sfm):
     los = 0
     for i in range(FLAGS.epoch + 3):
         feedlis = {iter:i}
-        _,los = sess.run([train_op,loss],feed_dict=feedlis)
+        if i<250:
+          _,los = sess.run([train_op0,loss],feed_dict=feedlis)
+        else:
+          _,los = sess.run([train_op,loss],feed_dict=feedlis)
 
         if i%50==0:
             print(i, "loss = ",los )

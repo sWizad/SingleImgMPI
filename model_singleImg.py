@@ -42,23 +42,26 @@ sub_sam = max(FLAGS.sublayers,1)
 num_mpi = FLAGS.layers
 offset = FLAGS.offset
 dmin, dmax = -1,-1#0.2,15
-max_step = 2
+max_step = 1
 
+def create_input(sfm,features,mpi_sig):
+  samples = tf.contrib.resampler.resampler(mpi_sig,HomoWarp(sfm,features,sfm.features))
+  colord = samples[:,:,:,:3]
+  alphad = samples[:,:,:,3:4]
+  Transmit = tf.math.cumprod(1-alphad,0,exclusive=True)
+  Rrr  = Transmit * colord * alphad
+  Rd = tf.math.cumsum(Rrr,0,exclusive=True)
+  output = tf.expand_dims(Rd[-1] + Rrr[-1] ,0)
+  img = tf.concat([output,features['img'][0:1]],-1)
+  img_tile = tf.tile(img,[num_mpi*sub_sam,1,1,1])
+  pack = tf.concat([img_tile,alphad*Transmit,colord*Transmit,Rd*Transmit],-1)
+  input = tf.contrib.resampler.resampler(pack,InvzHomoWarp(sfm,features,sfm.features))
+  return tf.concat([mpi_sig,input],-1), output
 
-
-def inv_ref(sfm):
-    iwarp = InvzHomoWarp(sfm, sfm.features, sfm.features)
-    img_tile = cv2.resize(sfm.ref_img,(int(sfm.ow*FLAGS.scale),int(sfm.oh*FLAGS.scale)))
-    img_tile = tf.expand_dims(img_tile,0)
-    img_tile = tf.tile(img_tile,[num_mpi*sub_sam,1,1,1])
-    img_tile = -tf.math.log(tf.maximum(1/img_tile-1,0.006))
-    elem = tf.contrib.resampler.resampler(img_tile,iwarp)
-    #exit()
-    return elem
     
 def UNet(input,depth=3):
   next = input
-  chanels = [8*2**i for i in range(depth)]
+  chanels = [18*2**i for i in range(depth)]
   layer = []
   for i,c in enumerate(chanels):
     next = lrelu(conv2d(next,c,name="downA"+str(i)))
@@ -71,15 +74,14 @@ def UNet(input,depth=3):
     next = lrelu(conv2d(next,c,name="up"+str(i)))
     next = upscale2d(next)
 
-  last = conv2d(next,6,name="clast")
+  last = conv2d(next,8,name="clast")
   return last
 
 def train_MPI(sfm):
     iter = tf.compat.v1.placeholder(tf.float32, shape=[], name='iter')
     lod_in = tf.compat.v1.placeholder(tf.float32, shape=[], name='lod_in')
-    print(getPlanes(sfm))
-    features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
 
+    features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
     real_img = features0['img']
 
     bh = sfm.h + 2 * offset
@@ -99,44 +101,56 @@ def train_MPI(sfm):
 
     int_mpi1 = np.random.uniform(-1, 1,[num_mpi, bh, bw, 3]).astype(np.float32)
     int_mpi2 = np.random.uniform(-5,-3,[num_mpi*sub_sam, bh, bw, 1]).astype(np.float32)
-    int_mpi3 = np.zeros([num_mpi*sub_sam, bh, bw, 4]).astype(np.float32)
+    ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
+    int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
+    int_mpi2[-1] += 3
 
-    tt = True
+    tt = False
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
+      mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
       #last_al = tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
       #mpia += last_al * tf.maximum(1-iter/100,0)
     
-    mpic = inv_ref(sfm)
+    #mpic = inv_ref(sfm)
     new_mpi = tf.concat([mpic,mpia],-1)
     
 
     #lr = tf.compat.v1.train.exponential_decay(0.1,iter,1000,0.2)
     lr = 0.00015
     optimizer = tf.compat.v1.train.AdamOptimizer(lr)
-    fac = 1.0#(1 - iter/(1500*2))# *0.01
+    fac = 0.1#(1 - iter/(1500*2))# *0.01
     tva = tf.constant(0.1) * fac #*0.01
-    tvc = tf.constant(0.005)  * fac #*2.0
+    tvc = tf.constant(0.005)  * fac *0.0
 
     mpi_sig = tf.sigmoid(new_mpi)
-    img_out = network( sfm, features0, sfm.features, mpi_sig, center)
-    img_list = [img_out]
+    #img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+    #img_list = [img_out]
+    img_list = []
     train_list = []
     for i in range(max_step):
       with tf.compat.v1.variable_scope("step"+str(i)):
-        delta = UNet(tf.concat([mpic,mpic[:,:,:,:3]*mpi_sig[:,:,:,3:4]],-1),3)
-        if i == 0: mpic = tf.concat([mpic,tf.zeros_like(mpic)],-1)
-        mpic = mpic + delta
-        new_mpi = tf.concat([mpic[:,:,:,:3],mpia],-1)
-        mpi_sig = tf.sigmoid(new_mpi)
-        img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+        #features = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
+        input, img_out = create_input(sfm,features0,mpi_sig)
         img_list.append(img_out)
-        loss = 0
-        loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
-        loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
-        loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
-        train_op = slim.learning.create_train_op(loss,optimizer)
-        train_list.append(train_op)
+        if i>0:
+          loss =  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
+          loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
+          train_list.append(slim.learning.create_train_op(loss,optimizer))
+
+        delta = UNet(input,3)
+        if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
+        new_mpi = new_mpi + delta
+        mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
+
+    img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+    img_list.append(img_out)
+    loss = 0
+    loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
+    loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
+    loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
+    train_op = slim.learning.create_train_op(loss,optimizer)
+    train_list.append(train_op)
     step_img = tf.concat(img_list, 1)
 
 
@@ -179,10 +193,10 @@ def train_MPI(sfm):
     else:
       sess.run(tf.compat.v1.global_variables_initializer())
 
-    t_vars = slim.get_variables_to_restore()
-    var2restore = [var for var in t_vars if 'mpi' in var.name and 'Adam' not in var.name ]
-    saver = tf.train.Saver(var2restore)
-    saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
+    #t_vars = slim.get_variables_to_restore()
+    #var2restore = [var for var in t_vars if 'mpi_a' in var.name and 'Adam' not in var.name ]
+    #saver = tf.train.Saver(var2restore)
+    #saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
 
 
 

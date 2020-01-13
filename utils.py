@@ -327,3 +327,12 @@ def mask_maker(sfm,features,ref_feat):
   mask = samples[0:1]*samples[1:2]
 
   return mask*0.99 + (1-mask)*0.01
+
+  def inv_ref(sfm):
+    iwarp = InvzHomoWarp(sfm, sfm.features, sfm.features)
+    img_tile = cv2.resize(sfm.ref_img,(int(sfm.ow*FLAGS.scale),int(sfm.oh*FLAGS.scale)))
+    img_tile = tf.expand_dims(img_tile,0)
+    img_tile = -tf.math.log(tf.maximum(1/img_tile-1,0.006))
+    img_tile = tf.tile(img_tile,[num_mpi*sub_sam,1,1,1])
+    elem = tf.contrib.resampler.resampler(img_tile,iwarp)
+    return elem
