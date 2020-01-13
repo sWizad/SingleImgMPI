@@ -3,3 +3,5 @@ __pycache__/*
 TensorB/*
 model/*
 webpath/*
+result/*
+webpath/*

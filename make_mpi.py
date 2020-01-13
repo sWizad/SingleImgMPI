@@ -1,5 +1,4 @@
-## no sub render equation
-## gradient model
+## Make MPI by direct optimization
 import os, sys
 import numpy as np
 import tensorflow as tf
