@@ -45,8 +45,9 @@ dmin, dmax = -1,-1#0.2,15
 def train_MPI(sfm):
     iter = tf.compat.v1.placeholder(tf.float32, shape=[], name='iter')
     lod_in = tf.compat.v1.placeholder(tf.float32, shape=[], name='lod_in')
+    ratio = tf.compat.v1.placeholder(tf.float32, shape=[num_mpi,1,1,1], name='lod_in')
     
-    features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
+    features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = True)
     real_img = features0['img']
 
     bh = sfm.h + 2 * offset
@@ -77,8 +78,8 @@ def train_MPI(sfm):
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
       mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
-      last_al = tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
-      mpia += last_al * tf.maximum(1-iter/500,0)
+      white_plane = tf.ones_like(mpia)#tf.concat([tf.zeros_like(mpia[:-1]),tf.ones_like(mpia[0:1])*5],0)
+      mpia += white_plane * ratio #last_al * tf.maximum(1-iter/100,0)
       new_mpi = tf.concat([tf.tile(mpic,[sub_sam,1,1,1]),mpia],-1)
       tf.compat.v1.add_to_collection("mpia",mpia)
 
@@ -87,7 +88,7 @@ def train_MPI(sfm):
 
     fac = tf.maximum(1 - iter/(1500),0)# *0.01
     tva = tf.constant(0.1) * fac #*0.01
-    tvc = tf.constant(0.005)  * fac *0.0
+    tvc = tf.constant(0.005)  * fac *0.01
 
     mpi_sig = tf.sigmoid(new_mpi)
     img_out = network( sfm, features0, sfm.features, mpi_sig, center)
@@ -115,6 +116,7 @@ def train_MPI(sfm):
                 tf.compat.v1.summary.image("post0/out1",tf.concat([real_img[-1:],image_out],1)),
                 tf.compat.v1.summary.image("post1/o_alpha",a_long),
                 tf.compat.v1.summary.image("post1/o_color",c_long),
+                tf.compat.v1.summary.image("post1/o_acolor",c_long*a_long),
                 ])
 
     config = ConfigProto()
@@ -152,19 +154,32 @@ def train_MPI(sfm):
 
     los = 0
     for i in range(FLAGS.epoch + 3):
-        feedlis = {iter:i}
-        if i<250:
-          _,los = sess.run([train_op0,loss],feed_dict=feedlis)
-        else:
-          _,los = sess.run([train_op,loss],feed_dict=feedlis)
+      rr = np.zeros((num_mpi,1,1,1))
+      #rr[-1] = 3-i/100
+      #rr = np.clip(rr,0,5)
+      ii = i//100 
+      #Sub Back2Front
+      rr[39-ii*2+2:39-ii*2] = -6 * (i-ii*100)/100
+      #if i<5000:
+      #  rr[39-ii] = 6 * (1.2+ii - i/100)#
 
-        if i%50==0:
-            print(i, "loss = ",los )
-        if i%20 == 0:
-            summ = sess.run(summary,feed_dict=feedlis)
-            writer.add_summary(summ,i)
-        if i%200==199:
-            saver.save(sess, localpp + '/' + str(000))
+      #if i>500 and i<600: rr[8]= -3
+      #if i>600 and i<700: rr[10]= -3
+      #if i>700 and i<300: rr[12]= -3
+      #if i>800 and i<900: rr[-1]= -3
+      feedlis = {iter:i,ratio:rr}
+      if i<0:
+        _,los = sess.run([train_op0,loss],feed_dict=feedlis)
+      else:
+        _,los = sess.run([train_op,loss],feed_dict=feedlis)
+
+      if i%50==0:
+          print(i, "loss = ",los )
+      if i%20 == 0:
+          summ = sess.run(summary,feed_dict=feedlis)
+          writer.add_summary(summ,i)
+      if i%200==199:
+          saver.save(sess, localpp + '/' + str(000))
     saver.save(sess, localpp + '/mpi')
 
 def predict(sfm):
@@ -199,32 +214,24 @@ def predict(sfm):
     nw = sfm.w + offset * 2
     sfm.nh = nh
     sfm.nw = nw
+    sfm.num_mpi = num_mpi
+    sfm.offset = offset
 
     int_mpi1 = np.random.uniform(-1, 1,[num_mpi, nh, nw, 3]).astype(np.float32)
     int_mpi2 = np.random.uniform(-5,-3,[num_mpi*sub_sam, nh, nw, 1]).astype(np.float32)
-    int_mpi3 = np.zeros([num_mpi*sub_sam, nh, nw, 4]).astype(np.float32)
+
+    ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
+    int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
+    int_mpi2[-1] = -1
 
 
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
         mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=False)   
         mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=False)
-        mpie = tf.compat.v1.get_variable("mpi_e", initializer=int_mpi3, trainable=False)
-        tf.compat.v1.add_to_collection("mpie",mpie)
+        new_mpi = tf.concat([tf.tile(mpic,[sub_sam,1,1,1]),mpia],-1)
 
-        mpi0 = tf.concat([tf.tile(mpic,[sub_sam,1,1,1]),mpia, mpie],-1)
-
-
-    new_mpi = mpi0
-
-    center = np.array([[[[0,0]]]])
-    for i in range(max_step):
-      features2 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],num_,is_shuff = True)
-      new_mpi = update_Block(new_mpi,sfm,features2,sfm.features,step=i,center=center)
-
-
-    name1 = tf.compat.v1.get_collection('mpie')
-    gen_mpi = name1[0].assign(new_mpi[:,:,:,:4])
-    img_out = network(sfm,features,sfm.features,tf.sigmoid(mpie))
+    mpi_sig = tf.sigmoid(new_mpi)
+    img_out = network(sfm,features,sfm.features,mpi_sig)
 
     with tf.compat.v1.variable_scope("post%d"%(FLAGS.index)):
         image_out= tf.clip_by_value(img_out[0],0.0,1.0)
@@ -234,20 +241,20 @@ def predict(sfm):
     sess = tf.compat.v1.Session(config=config)
     sess.run(tf.compat.v1.global_variables_initializer())
     t_vars = slim.get_variables_to_restore()
-    variables_to_restore = [var for var in t_vars if 'Net' not in var.name]
+    variables_to_restore = [var for var in t_vars if 'Net' in var.name]
     #variables_to_restore = slim.get_variables_to_restore()
     print(variables_to_restore)
     saver = tf.train.Saver(variables_to_restore)
-    localpp = './model/' + FLAGS.dataset +"/s%02d"%FLAGS.subscale
+    localpp = './model/space/' + FLAGS.dataset  #+ '/mpi'
     ckpt = tf.train.latest_checkpoint(localpp )
     saver.restore(sess, ckpt)
 
-    sess.run(gen_mpi)
+    webpath = "webpath/"  #"/var/www/html/orbiter/"
+    if not os.path.exists(webpath + FLAGS.dataset):
+        os.system("mkdir " + webpath + FLAGS.dataset)
+
 
     if True:  # make sample picture and video
-        webpath = "webpath/"  #"/var/www/html/orbiter/"
-        if not os.path.exists(webpath + FLAGS.dataset+"_s%02d"%FLAGS.subscale):
-            os.system("mkdir " + webpath + FLAGS.dataset+"_s%02d"%FLAGS.subscale)
 
         for i in range(0,300,1):
           #feed = sess.run(features)
@@ -255,13 +262,41 @@ def predict(sfm):
           out = sess.run(image_out,feed_dict={lod_in:0})
           if (i%50==0): 
             print(i)
-            plt.imsave("webpath/"+FLAGS.dataset+"_s%02d"%FLAGS.subscale+"/%04d.png"%( i),out)
+            plt.imsave("webpath/"+FLAGS.dataset+"/%04d.png"%( i),out)
           plt.imsave("result/frame/"+FLAGS.dataset+"_%04d.png"%( i),out)
 
-        cmd = 'ffmpeg -y -i ' + 'result/frame/'+FLAGS.dataset+'_%04d.png -c:v libx264 -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -pix_fmt yuv420p webpath/'+FLAGS.dataset+"_s%02d"%FLAGS.subscale+'/moving.mp4'
+        cmd = 'ffmpeg -y -i ' + 'result/frame/'+FLAGS.dataset+'_%04d.png -c:v libx264 -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -pix_fmt yuv420p webpath/'+FLAGS.dataset+'/moving.mp4'
         print(cmd)
         os.system(cmd)
-    exit()
+ 
+    if True:  # make web viewer
+
+      ret = sess.run(mpi_sig,feed_dict={lod_in:0})
+      mpis = []
+      for i in range(num_mpi):
+          mpis.append(ret[i,:,:,:4])
+
+      mpis = np.concatenate(mpis, 1)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi%02d.png"%(FLAGS.index), mpis)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi.png", mpis)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi_alpha.png", np.tile(mpis[:, :, 3:], (1, 1, 3)))
+
+      namelist = "["
+      for ii in range(FLAGS.index+1):
+        namelist += "\"%02d\","%(ii)
+      namelist += "]"
+      print(namelist)
+
+      ref_r = sfm.ref_r
+      ref_t = sfm.ref_t
+      with open(webpath + FLAGS.dataset+ "/extrinsics%02d.txt"%(FLAGS.index), "w") as fo:
+        for i in range(3):
+          for j in range(3):
+            fo.write(str(ref_r[ i, j]) + " ")
+        fo.write(" ".join([str(x) for x in np.nditer(ref_t)]) + "\n")
+
+      #generateWebGL(webpath + FLAGS.dataset+ "/index.html", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py)
+      generateConfigGL(webpath + FLAGS.dataset+ "/config.js", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py)
 
 
 def main(argv):

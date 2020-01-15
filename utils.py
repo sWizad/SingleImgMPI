@@ -45,6 +45,41 @@ def colored_hook(home_dir):
     print(colorize("%s: %s" % (type_.__name__, value), "cyan"))
   return hook
 
+def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py):
+  print("Generating WebGL viewer")
+  fo = open(outputFile, "w")
+
+  replacer = {}
+  replacer["WIDTH"] = w;
+  replacer["HEIGHT"] = h;
+  replacer["PLANES"] = "[" + ",".join([str(x) for x in planes]) + "]"
+  #replacer["nPLANES"] = len(planes);
+  replacer["nSUBPLANES"] = subplane;
+  replacer["F"] = f
+  replacer["NAMES"] = namelist#"[\"\"]"
+  replacer["PX"] = px
+  replacer["PY"] = py
+
+
+  
+  st = """
+  const w = {WIDTH};
+  const h = {HEIGHT};
+  const nSubPlanes = {nSUBPLANES};
+
+  const planes = {PLANES};
+  const f = {F};
+  var names = {NAMES};
+
+  const py = {PY};
+  const px = {PX};
+  const invz = 0;
+  """
+  for k in replacer:
+      st = st.replace("{" + k + "}", str(replacer[k]))
+
+  fo.write(st + '\n')
+  fo.close()
 
 def _blur2d(x, f=[1,2,1], normalize=True, flip=False, stride=1):
     assert x.shape.ndims == 4 and all(dim.value is not None for dim in x.shape[1:])

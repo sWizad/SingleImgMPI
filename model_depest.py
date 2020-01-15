@@ -42,25 +42,24 @@ sub_sam = max(FLAGS.sublayers,1)
 num_mpi = FLAGS.layers
 offset = FLAGS.offset
 dmin, dmax = -1,-1#0.2,15
-max_step = 3
-version = "SingUChain"
+max_step = 0
+version = "DepthEst"
 
-def create_input(sfm,features,mpi):
-  mpi_sig = tf.sigmoid(mpi)
+def create_input(sfm,features,mpi_sig):
   samples = tf.contrib.resampler.resampler(mpi_sig,HomoWarp(sfm,features,sfm.features))
   colord = samples[:,:,:,:3]
   alphad = samples[:,:,:,3:4]
   Transmit = tf.math.cumprod(1-alphad,0,exclusive=True)
   Rrr  = Transmit * colord * alphad
   Rd = tf.math.cumsum(Rrr,0,exclusive=True)
-  output = Rd[-1:]+Rrr[-1:] #tf.expand_dims(Rd[-1] + Rrr[-1] ,0)
+  output = Rd[-1:]+Rrr[-1:]
   img = tf.concat([output,features['img'][0:1]],-1)
   img_tile = tf.tile(img,[num_mpi*sub_sam,1,1,1])
   #out_tile = tf.tile(output,[num_mpi*sub_sam,1,1,1])
   #img_tile = tf.tile(features['img'][0:1],[num_mpi*sub_sam,1,1,1])
   pack = tf.concat([img_tile,(colord-Rd)*Transmit,alphad*Transmit],-1)
   input = tf.contrib.resampler.resampler(pack,InvzHomoWarp(sfm,features,sfm.features))
-  return tf.concat([mpi,input],-1), output
+  return tf.concat([mpi_sig,input],-1), output
 
     
 def UNet(input,depth=3):
@@ -81,6 +80,35 @@ def UNet(input,depth=3):
   next = tf.concat([input[:,:,:,:4],next],-1)
   last = conv2d(next,8,name="clast")
   return last
+
+def DepthEst(sfm,depth=6):
+    int_mpi1 = np.zeros([1, sfm.nh, sfm.nw, 3],dtype=np.float32)
+    int_mpi1[:,sfm.offset:sfm.h + sfm.offset,sfm.offset:sfm.w +sfm. offset,:] = np.array([sfm.ref_img])
+    ref_img = tf.convert_to_tensor(int_mpi1)
+    next = ref_img
+    chanels = [6*2**i for i in range(depth)]
+    layer = []
+    for i,c in enumerate(chanels):
+        next = lrelu(conv2d(next,c,stride=[1,2,2,1],name="downA"+str(i)))
+        layer.append(next)
+
+    next = lrelu(conv2d(next,chanels[-1],name="mid"))
+    for i,c in enumerate(reversed(chanels)):
+        next = tf.concat([next,layer[depth-1-i]],-1)
+        next = lrelu(conv2d(next,c,name="up"+str(i)))
+        next = upscale2d(next)
+
+    next = tf.concat([ref_img,next],-1)
+    last = conv2d(next,2,name="clast")
+
+    plane = getPlanes(sfm).astype(np.float32)
+    plane = tf.convert_to_tensor(plane.reshape(-1,1,1,1))
+    aa = tf.math.exp(-tf.square(last-plane))
+    depth = aa/(tf.reduce_sum(aa,0,keepdims=True)+1e-5)
+    #depth = tf.nn.softmax(aa,0)
+    mpia = tf.math.reduce_mean(depth,-1,keepdims=True)
+    return mpia
+
 
 def train_MPI(sfm):
     iter = tf.compat.v1.placeholder(tf.float32, shape=[], name='iter')
@@ -108,13 +136,14 @@ def train_MPI(sfm):
     ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
     int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
     #int_mpi2[-1] += 1
+    mpia_sig = DepthEst(sfm,depth=6)
 
     tt = False
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
       mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
-      mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
+      mpia0 = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
 
-    new_mpi = tf.concat([mpic,mpia],-1)
+    new_mpi = tf.concat([mpic,mpia0],-1)
     
 
     lr = tf.compat.v1.train.exponential_decay(0.00015,iter,1000,0.2)
@@ -124,13 +153,14 @@ def train_MPI(sfm):
     tva = tf.constant(0.1) * fac #*0.01
     tvc = tf.constant(0.005)  * fac *0.0
 
-    mpi_sig = tf.sigmoid(new_mpi)
+    #mpi_sig = tf.sigmoid(new_mpi)
+    mpi_sig = tf.concat([tf.sigmoid(mpic),mpia_sig],-1)
     img_list = []
     train_list = []
     for i in range(max_step):
       with tf.compat.v1.variable_scope("step"+str(i)):
         features = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
-        input, img_out = create_input(sfm,features,new_mpi)
+        input, img_out = create_input(sfm,features,mpi_sig)
         img_list.append(img_out)
         if i>0:
           mask = mask_maker(sfm,features,sfm.features)
@@ -143,26 +173,29 @@ def train_MPI(sfm):
         new_mpi = new_mpi + delta
         mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
 
-    img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+    img_out = network( sfm, features0, sfm.features, tf.concat([mpi_sig[:, :, :, :3],mpia_sig],-1), center)
     mask = mask_maker(sfm,features0,sfm.features)
     img_list.append(img_out)
     loss = 0
-    loss +=  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
+    loss += 100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
+    loss += 10000 * tf.reduce_mean(tf.square(mpia_sig - mpi_sig[:, :, :, 3:4]))
     loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
-    loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
+    #loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
     train_op = slim.learning.create_train_op(loss,optimizer)
     train_list.append(train_op)
     step_img = tf.concat(img_list, 1)
 
 
     image_out = tf.clip_by_value(img_out,0.0,1.0)
-    a_long = tf.reshape(mpi_sig[:,:,:,3:4],(1,num_mpi*sub_sam*bh,bw,1))
+    a_long = tf.reshape(mpia_sig,(1,num_mpi*sub_sam*bh,bw,1))
+    a0_long = tf.reshape(mpi_sig[:,:,:,3:4],(1,num_mpi*sub_sam*bh,bw,1))
     c_long = tf.reshape(mpi_sig[:,:,:,:3],(1,num_mpi*sub_sam*bh,bw,3))
     summary = tf.compat.v1.summary.merge([
                 tf.compat.v1.summary.scalar("post0/all_loss", loss),
                 #tf.compat.v1.summary.image("post1/out0",step_img[:,:,:,:3]),
                 tf.compat.v1.summary.image("post0/step",step_img),
                 tf.compat.v1.summary.image("post0/out1",tf.concat([real_img[-1:],image_out],1)),
+                tf.compat.v1.summary.image("post1/o_alpha0",a0_long),
                 tf.compat.v1.summary.image("post1/o_alpha",a_long),
                 tf.compat.v1.summary.image("post1/o_color",c_long),
                 tf.compat.v1.summary.image("post1/oa_color",c_long*a_long),
@@ -194,14 +227,14 @@ def train_MPI(sfm):
       ckpt = tf.train.latest_checkpoint(localpp )
       saver.restore(sess, ckpt)
 
-    #t_vars = slim.get_variables_to_restore()
-    #var2restore = [var for var in t_vars if 'mpi_a' in var.name and 'Adam' not in var.name ]
-    #saver = tf.train.Saver(var2restore)
-    #saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
+    t_vars = slim.get_variables_to_restore()
+    var2restore = [var for var in t_vars if 'mpi_a' in var.name and 'Adam' not in var.name ]
+    saver = tf.train.Saver(var2restore)
+    saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
 
 
-    var2restore = [var for var in slim.get_variables_to_restore() if 'Net' not in var.name ] 
-    localpp = './model/space/' + FLAGS.dataset 
+    var2restore = [var for var in t_vars if 'Net' not in var.name ] 
+    localpp = './model/space/' + version
     if not os.path.exists(localpp):
         os.makedirs(localpp)
     saver = tf.train.Saver()
@@ -285,7 +318,7 @@ def predict(sfm):
     for i in range(max_step):
       with tf.compat.v1.variable_scope("step"+str(i)):
         features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = True)
-        input, img_out = create_input(sfm,features0,new_mpi)
+        input, img_out = create_input(sfm,features0,mpi_sig)
         delta = UNet(input,3)
         if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
         new_mpi = new_mpi + delta
