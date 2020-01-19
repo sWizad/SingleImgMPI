@@ -45,7 +45,7 @@ def colored_hook(home_dir):
     print(colorize("%s: %s" % (type_.__name__, value), "cyan"))
   return hook
 
-def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py):
+def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py,offset=0):
   print("Generating WebGL viewer")
   fo = open(outputFile, "w")
 
@@ -59,6 +59,7 @@ def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py):
   replacer["NAMES"] = namelist#"[\"\"]"
   replacer["PX"] = px
   replacer["PY"] = py
+  replacer["OFFSET"] = offset
 
 
   
@@ -70,10 +71,15 @@ def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py):
   const planes = {PLANES};
   const f = {F};
   var names = {NAMES};
+  var nMpis = names.length;
 
   const py = {PY};
   const px = {PX};
   const invz = 0;
+
+  const offset = {OFFSET};
+  const maxcol = 12;
+  const version = "simple";
   """
   for k in replacer:
       st = st.replace("{" + k + "}", str(replacer[k]))
@@ -363,11 +369,19 @@ def mask_maker(sfm,features,ref_feat):
 
   return mask*0.99 + (1-mask)*0.01
 
-  def inv_ref(sfm):
+def inv_ref(sfm):
     iwarp = InvzHomoWarp(sfm, sfm.features, sfm.features)
     img_tile = cv2.resize(sfm.ref_img,(int(sfm.ow*FLAGS.scale),int(sfm.oh*FLAGS.scale)))
     img_tile = tf.expand_dims(img_tile,0)
     img_tile = -tf.math.log(tf.maximum(1/img_tile-1,0.006))
+    img_tile = tf.tile(img_tile,[num_mpi*sub_sam,1,1,1])
+    elem = tf.contrib.resampler.resampler(img_tile,iwarp)
+    return elem
+
+def inv_img_sig(sfm,features):
+    iwarp = InvzHomoWarp(sfm, features, sfm.features)
+    img_tile = features['img']
+    #img_tile = -tf.math.log(tf.maximum(1/img_tile-1,0.006))
     img_tile = tf.tile(img_tile,[num_mpi*sub_sam,1,1,1])
     elem = tf.contrib.resampler.resampler(img_tile,iwarp)
     return elem

@@ -3,11 +3,8 @@
 import os, sys
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 import matplotlib.pyplot as plt
-from matplotlib import cm
 from tensorflow.compat.v1 import ConfigProto
-from mpl_toolkits.mplot3d import Axes3D
 import cv2
 from sfm_utils import SfMData
 
@@ -103,7 +100,7 @@ def DepthEst(sfm,depth=6):
 
     plane = getPlanes(sfm).astype(np.float32)
     plane = tf.convert_to_tensor(plane.reshape(-1,1,1,1))
-    aa = tf.math.exp(-tf.square(last-plane))
+    aa = tf.math.exp(-tf.square(last-plane)/2)
     depth = aa/(tf.reduce_sum(aa,0,keepdims=True)+1e-5)
     #depth = tf.nn.softmax(aa,0)
     mpia = tf.math.reduce_mean(depth,-1,keepdims=True)
@@ -157,29 +154,30 @@ def train_MPI(sfm):
     mpi_sig = tf.concat([tf.sigmoid(mpic),mpia_sig],-1)
     img_list = []
     train_list = []
-    for i in range(max_step):
-      with tf.compat.v1.variable_scope("step"+str(i)):
-        features = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
-        input, img_out = create_input(sfm,features,mpi_sig)
-        img_list.append(img_out)
-        if i>0:
-          mask = mask_maker(sfm,features,sfm.features)
-          loss =  100000 * tf.reduce_mean(tf.square(img_out[0] - features['img'][0])*mask)
-          loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
-          train_list.append(slim.learning.create_train_op(loss,optimizer))
+    #for i in range(max_step):
+    #  with tf.compat.v1.variable_scope("step"+str(i)):
+    #    features = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
+    #    input, img_out = create_input(sfm,features,mpi_sig)
+    #    img_list.append(img_out)
+    #    if i>0:
+    #      mask = mask_maker(sfm,features,sfm.features)
+    #      loss =  100000 * tf.reduce_mean(tf.square(img_out[0] - features['img'][0])*mask)
+    #      loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
+    #      train_list.append(slim.learning.create_train_op(loss,optimizer))
 
-        delta = UNet(input,3)
-        if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
-        new_mpi = new_mpi + delta
-        mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
+    #    delta = UNet(input,3)
+    #    if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
+    #    new_mpi = new_mpi + delta
+    #    mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
 
-    img_out = network( sfm, features0, sfm.features, tf.concat([mpi_sig[:, :, :, :3],mpia_sig],-1), center)
+
+    img_out = network( sfm, features0, sfm.features, mpi_sig, center)
     mask = mask_maker(sfm,features0,sfm.features)
     img_list.append(img_out)
     loss = 0
     loss += 100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
-    loss += 10000 * tf.reduce_mean(tf.square(mpia_sig - mpi_sig[:, :, :, 3:4]))
-    loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
+    #loss += 10000 * tf.reduce_mean(tf.square(mpia_sig - mpi_sig[:, :, :, 3:4]))
+    #loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
     #loss += tva * tf.reduce_mean(tf.image.total_variation (mpi_sig[:, :, :, 3:4]))
     train_op = slim.learning.create_train_op(loss,optimizer)
     train_list.append(train_op)
@@ -198,7 +196,7 @@ def train_MPI(sfm):
                 tf.compat.v1.summary.image("post1/o_alpha0",a0_long),
                 tf.compat.v1.summary.image("post1/o_alpha",a_long),
                 tf.compat.v1.summary.image("post1/o_color",c_long),
-                tf.compat.v1.summary.image("post1/oa_color",c_long*a_long),
+                tf.compat.v1.summary.image("post1/o_acolor",c_long*a_long),
                 ])
 
     config = ConfigProto()
@@ -228,9 +226,9 @@ def train_MPI(sfm):
       saver.restore(sess, ckpt)
 
     t_vars = slim.get_variables_to_restore()
-    var2restore = [var for var in t_vars if 'mpi_a' in var.name and 'Adam' not in var.name ]
-    saver = tf.train.Saver(var2restore)
-    saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
+    #var2restore = [var for var in t_vars if 'mpi_a' in var.name and 'Adam' not in var.name ]
+    #saver = tf.train.Saver(var2restore)
+    #saver.restore(sess, './model/space/'+FLAGS.dataset+'/mpi')
 
 
     var2restore = [var for var in t_vars if 'Net' not in var.name ] 
@@ -308,25 +306,26 @@ def predict(sfm):
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
       mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
-      mpie = tf.compat.v1.get_variable("mpi_e", initializer=int_mpi3, trainable=tt)
-      tf.compat.v1.add_to_collection("mpie",mpie)
+      mpie_sig = tf.compat.v1.get_variable("mpi_e", initializer=int_mpi3, trainable=tt)
+      tf.compat.v1.add_to_collection("mpie",mpie_sig)
 
     new_mpi = tf.concat([mpic,mpia],-1)
+    mpia_sig = DepthEst(sfm,depth=6)
 
 
-    mpi_sig = tf.sigmoid(new_mpi)
-    for i in range(max_step):
-      with tf.compat.v1.variable_scope("step"+str(i)):
-        features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = True)
-        input, img_out = create_input(sfm,features0,mpi_sig)
-        delta = UNet(input,3)
-        if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
-        new_mpi = new_mpi + delta
-        mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
+    mpi_sig = tf.concat([tf.sigmoid(mpic),mpia_sig],-1)#tf.sigmoid(new_mpi)
+    #for i in range(max_step):
+    #  with tf.compat.v1.variable_scope("step"+str(i)):
+    #    features0 = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = True)
+    #    input, img_out = create_input(sfm,features0,mpi_sig)
+    #    delta = UNet(input,3)
+    #    if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
+    #    new_mpi = new_mpi + delta
+    #    mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
 
     name1 = tf.compat.v1.get_collection('mpie')
-    gen_mpi = name1[0].assign(new_mpi[:,:,:,:4])
-    img_out = network(sfm,features,sfm.features,tf.sigmoid(mpie))
+    gen_mpi = name1[0].assign(mpi_sig[:,:,:,:4])
+    img_out = network(sfm,features,sfm.features,mpie_sig)
 
     with tf.compat.v1.variable_scope("post%d"%(FLAGS.index)):
         image_out= tf.clip_by_value(img_out[0],0.0,1.0)
@@ -340,17 +339,19 @@ def predict(sfm):
     #variables_to_restore = slim.get_variables_to_restore()
     #print(variables_to_restore)
     saver = tf.train.Saver(variables_to_restore)
-    localpp = './model/space/' + FLAGS.dataset 
-    ckpt = tf.train.latest_checkpoint(localpp )
+    localpp = './model/space/' + version
+    ckpt = localpp + '/state'
+    #ckpt = tf.train.latest_checkpoint(localpp )
     saver.restore(sess, ckpt)
 
     sess.run(gen_mpi)
 
-    if True:  # make sample picture and video
-        webpath = "webpath/"  #"/var/www/html/orbiter/"
-        if not os.path.exists(webpath + FLAGS.dataset):
-            os.system("mkdir " + webpath + FLAGS.dataset)
+    webpath = "webpath/"  #"/var/www/html/orbiter/"
+    if not os.path.exists(webpath + FLAGS.dataset):
+        os.system("mkdir " + webpath + FLAGS.dataset)
 
+
+    if True:  # make sample picture and video
         for i in range(0,300,1):
           #feed = sess.run(features)
           #out = sess.run(image_out,feed_dict={lod_in:0,rot:feed["r"][0],tra:feed["t"][0]})
@@ -363,7 +364,35 @@ def predict(sfm):
         cmd = 'ffmpeg -y -i ' + 'result/frame/'+FLAGS.dataset+'_%04d.png -c:v libx264 -vf "pad=ceil(iw/2)*2:ceil(ih/2)*2" -pix_fmt yuv420p webpath/'+FLAGS.dataset+'/moving.mp4'
         print(cmd)
         os.system(cmd)
-    exit()
+
+    if True:  # make web viewer
+
+      ret = sess.run(mpi_sig,feed_dict={lod_in:0})
+      mpis = []
+      for i in range(num_mpi):
+          mpis.append(ret[i,:,:,:4])
+
+      mpis = np.concatenate(mpis, 1)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi%02d.png"%(FLAGS.index), mpis)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi.png", mpis)
+      plt.imsave(webpath + FLAGS.dataset+ "/mpi_alpha.png", np.tile(mpis[:, :, 3:], (1, 1, 3)))
+
+      namelist = "["
+      for ii in range(FLAGS.index+1):
+        namelist += "\"%02d\","%(ii)
+      namelist += "]"
+      print(namelist)
+
+      ref_r = sfm.ref_r
+      ref_t = sfm.ref_t
+      with open(webpath + FLAGS.dataset+ "/extrinsics%02d.txt"%(FLAGS.index), "w") as fo:
+        for i in range(3):
+          for j in range(3):
+            fo.write(str(ref_r[ i, j]) + " ")
+        fo.write(" ".join([str(x) for x in np.nditer(ref_t)]) + "\n")
+
+      generateConfigGL(webpath + FLAGS.dataset+ "/config.js", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py)
+
 
 
 def main(argv):
