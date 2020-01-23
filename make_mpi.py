@@ -270,8 +270,8 @@ def sigmoid_hack(mpi):
   ex = tf.math.exp(-mpi)
   def grad(dy):
     dx = ex/tf.square(ex+1)
-    #dx = tf.where(tf.abs(mpi)>1,0.196611933*tf.sqrt(dx),dx)
-    dx = tf.sqrt(dx)
+    dx = tf.where(tf.abs(mpi)>1,0.196611933*tf.sqrt(dx),dx)
+    #dx = tf.sqrt(dx)
     return dx * dy
   return 1/(1+ex), grad
 

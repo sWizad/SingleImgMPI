@@ -154,21 +154,6 @@ def train_MPI(sfm):
     mpi_sig = tf.concat([tf.sigmoid(mpic),mpia_sig],-1)
     img_list = []
     train_list = []
-    #for i in range(max_step):
-    #  with tf.compat.v1.variable_scope("step"+str(i)):
-    #    features = load_data(FLAGS.dataset,FLAGS.input,[sfm.h,sfm.w],1,is_shuff = False)
-    #    input, img_out = create_input(sfm,features,mpi_sig)
-    #    img_list.append(img_out)
-    #    if i>0:
-    #      mask = mask_maker(sfm,features,sfm.features)
-    #      loss =  100000 * tf.reduce_mean(tf.square(img_out[0] - features['img'][0])*mask)
-    #      loss += tvc * tf.reduce_mean(tf.image.total_variation(mpi_sig[:, :, :, :3]))
-    #      train_list.append(slim.learning.create_train_op(loss,optimizer))
-
-    #    delta = UNet(input,3)
-    #    if i == 0: new_mpi = tf.concat([new_mpi,tf.zeros_like(new_mpi)],-1)
-    #    new_mpi = new_mpi + delta
-    #    mpi_sig = tf.sigmoid(new_mpi[:,:,:,:4])
 
 
     img_out = network( sfm, features0, sfm.features, mpi_sig, center)

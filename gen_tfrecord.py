@@ -152,7 +152,7 @@ def generateDeepview():
         #pp += [1,2,4,6,8,12,9,13,14,15]
         pp += [i for i in range(16)]
 
-        for i0 in [2]+list(range(14)): #[2,9,0]:#range(6): #[0,4,5,10,11,13]:
+        for i0 in list(range(14)): #[2,9,0]:#range(6): #[0,4,5,10,11,13]:
           for p in pp:
             name = 'time%02d-cam_%02d' % (i0,p)
             cam = camera[name]

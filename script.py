@@ -12,7 +12,7 @@ dataset = "scene_056"
 if "63" in dataset:
   ref_img = "09-cam_06"
 elif "56" in dataset:
-  ref_img = "02-cam_06"
+  ref_img = "00-cam_06"
 elif "52" in dataset:
   ref_img = "00-cam_06"
 elif "23" in dataset:
