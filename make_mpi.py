@@ -57,7 +57,7 @@ def train_MPI(sfm):
 
     sfm.num_mpi = num_mpi
     sfm.offset = offset
-    print(getPlanes(sfm))
+    print(getPlanes(sfm,FLAGS.invz))
 
     center = np.array([[[[0,0]]]])
 
@@ -219,6 +219,14 @@ def train_MPI(sfm):
           saver.save(sess, localpp + '/' + str(000))
     saver.save(sess, localpp + '/mpi')
 
+def make_Rd(colord,alphad):
+  lis = [tf.ones_like(colord[0:1])]
+  R = 0 #colord[-1:] * alphad[-1:] 
+  for i in range(num_mpi-1):
+    R = R*(1-alphad[num_mpi-1-i:num_mpi-i]) + colord[num_mpi-2-i:num_mpi-1-i] * alphad[num_mpi-2-i:num_mpi-1-i]
+    lis = [R] + lis
+  return tf.concat(lis,0)
+
 def network_hack2(sfm, features, ref_feat, mpi, center=0):
   @tf.custom_gradient
   def composit(mpi):
@@ -248,12 +256,15 @@ def network_hack(sfm, features, ref_feat, mpi, center=0):
     alphad = samples[:,:,:,3:4]
     Transmit = tf.math.cumprod(1-alphad,0,exclusive=True)
     Rrr  = Transmit * colord * alphad
-    Rd = tf.math.cumsum(Rrr,0,exclusive=True)
-    output = Rd[-1:]+Rrr[-1:]
+    output = tf.reduce_sum(Rrr,0,keepdims=True)
+    #Rd = tf.math.cumsum(Rrr,0,exclusive=True)
+    #output = Rd[-1:]+Rrr[-1:]
     def grad(dy):
       #Tran = tf.where(alphad>0.95,tf.math.pow(Transmit,4/5),Transmit)
-      Tran = tf.concat([tf.ones_like(Transmit[0:1]),Transmit[:-1]],0)
-      Tran = tf.sqrt(Tran*Transmit)
+      #Tran = tf.concat([tf.ones_like(Transmit[0:1]),Transmit[:-1]],0)
+      #Tran = tf.sqrt(Tran*Transmit)
+      Tran = Transmit
+      Rd = make_Rd(colord,alphad)
       dOdc = alphad* Transmit* dy
       dOda = tf.reduce_sum((colord-Rd)*Tran*dy,-1,keepdims=True)
       return tf.concat([dOdc,dOda],-1)
@@ -294,6 +305,29 @@ def UNet(input,depth=3):
   last = conv2d(next,1,name="clast")
   return last
 
+
+def psv_mean(sfm,psv_mpi):
+  psv_mpi = [tf.reshape(psv,[-1,1,sfm.h + 2 * sfm.offset,sfm.w + 2 * sfm.offset,3]) for psv in psv_mpi]
+  psv_mpi = tf.concat(psv_mpi,1)
+  mean = tf.reduce_mean(psv_mpi,axis=1,keepdims=False)
+  #var = tf.reduce_mean(tf.square(psv_mpi-mean),axis=1)
+  #var = tf.reduce_mean(var,axis=-1,keepdims=True)
+  return mean
+
+def l0SplitProx(mpi,beta=0.01):
+  pixel_dif1 = mpi[:, 1:, :, :] - mpi[:, :-1, :, :]
+  pixel_dif2 = mpi[:, :, 1:, :] - mpi[:, :, :-1, :]
+  pixel_dif1 = tf.concat([pixel_dif1,mpi[:, -1:, :, :] - mpi[:, 0:1, :, :]],1)
+  pixel_dif2 = tf.concat([pixel_dif2,mpi[:, :, -1:, :] - mpi[:, :, 0:1, :]],2)
+
+  sumsq = tf.reduce_mean(tf.square(pixel_dif1) + tf.square(pixel_dif2),axis=-1,keepdims=True)
+  con = tf.stop_gradient(tf.cast( sumsq > beta, tf.float32))
+  total = (
+          tf.reduce_sum(tf.square(pixel_dif1)*con + 0.1*tf.abs(pixel_dif1)*(1-con),axis=[1,2,3]) + 
+          tf.reduce_sum(tf.square(pixel_dif2)*con + 0.1*tf.abs(pixel_dif2)*(1-con),axis=[1,2,3]) )
+
+  return total / (mpi.shape[1].value-1) / (mpi.shape[2].value-1) * 306081
+
 def train_Alpha(sfm):
     iter = tf.compat.v1.placeholder(tf.float32, shape=[], name='iter')
     lod_in = tf.compat.v1.placeholder(tf.float32, shape=[], name='lod_in')
@@ -312,18 +346,11 @@ def train_Alpha(sfm):
 
     sfm.num_mpi = num_mpi
     sfm.offset = offset
-    print(getPlanes(sfm))
+    print(getPlanes(sfm,FLAGS.invz))
 
     center = np.array([[[[0,0]]]])
 
     mask = mask_maker(sfm,features0,sfm.features)
-
-    int_mpi1 = np.random.uniform(-1, 1,[num_mpi, bh, bw, 3]).astype(np.float32)*0
-    int_mpi2 = np.random.uniform(-5,-3,[num_mpi*sub_sam, bh, bw, 1]).astype(np.float32)
-
-    ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
-    int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
-    #int_mpi2[-1] = -1
     
 
     num_psv = 4
@@ -331,7 +358,7 @@ def train_Alpha(sfm):
     iwarps = []
     warps = []
     for i in range(num_psv):
-      mpic = tf.compat.v1.get_variable("psv%d"%(i), initializer=int_mpi1, trainable=False)
+      mpic = tf.compat.v1.get_variable("psv%d"%(i), shape=[num_mpi, bh, bw, 3], trainable=False)
       tf.compat.v1.add_to_collection("psv",mpic)
       psv_mpi.append(mpic)
       iwarp = tf.compat.v1.get_variable("iw%d"%(i), shape=[num_mpi, bh, bw, 2], trainable=False)
@@ -354,12 +381,20 @@ def train_Alpha(sfm):
       make_psv.append(name2[i].assign(iwarp))
       make_psv.append(name3[i].assign(HomoWarp(sfm,features,sfm.features,i=i)))
 
+    #mean = psv_mean(sfm,psv_mpi)
+
+    int_mpi1 = np.random.uniform(-1, 1,[num_mpi, bh, bw, 3]).astype(np.float32)*0
+    int_mpi2 = np.random.uniform(-5,-4,[num_mpi*sub_sam, bh, bw, 1]).astype(np.float32)
+    ref_img = -np.log(np.maximum(1/sfm.ref_img-1,0.001))
+    int_mpi1[:,offset:sfm.h + offset,offset:sfm.w + offset,:] = np.array([ref_img])
+
     tt = True
     with tf.compat.v1.variable_scope("Net%d"%(FLAGS.index)):
       mpic = tf.compat.v1.get_variable("mpi_c", initializer=int_mpi1, trainable=tt) 
       mpia = tf.compat.v1.get_variable("mpi_a", initializer=int_mpi2, trainable=tt)
-      mpia = mpia #+ UNet(mpia,4)
-      mpia += ratio
+      #mpia = mpia #+ UNet(mpia,4)
+      #mpia += ratio
+
 
     #mpia_sig = tf.sigmoid(mpia)
     mpia_sig = sigmoid_hack(mpia)
@@ -386,9 +421,10 @@ def train_Alpha(sfm):
     optimizer = tf.compat.v1.train.AdamOptimizer(lr)
 
 
-    fac = tf.maximum(1 - iter/(1500),0.2)# *0.01
+    fac = 1.0 #tf.maximum(1 - iter/(1500),0.2)# *0.01
     tva = tf.constant(0.1) * fac #*0.01
     tvc = tf.constant(0.005) * fac #*0.1
+    beta = tf.compat.v1.train.exponential_decay(0.75,iter,200,0.5)
 
     mpi_sig0 = tf.concat([mpic0_sig,mpia_sig],-1)
     img_out0 = network( sfm, features0, sfm.features, mpi_sig0, center)
@@ -400,23 +436,30 @@ def train_Alpha(sfm):
     grad = tf.gradients(loss, [mpi_sig0])
     loss += tvc * tf.reduce_mean(tf.image.total_variation(mpic0_sig))
     loss += tva * tf.reduce_mean(tf.image.total_variation (mpia_sig))
-    #varmpi = [var for var in slim.get_variables_to_restore() if 'mpi_c' in var.name ]
+    #loss += tvc * tf.reduce_mean(l0SplitProx(mpic0_sig,beta))
+    #loss += tva * tf.reduce_mean(l0SplitProx(mpia_sig,beta))
+    train_op0 = optimizer.minimize(loss)
+    
     
     mpi_sig = tf.concat([mpic_sig,mpia_sig],-1)
-    img_out = network( sfm, features0, sfm.features, mpi_sig, center)
+    img_out = network_hack( sfm, features0, sfm.features, mpi_sig, center)
     loss2 =  100000 * tf.reduce_mean(tf.square(img_out[0] - real_img[-1])*mask)
     loss2 += tva * tf.reduce_mean(tf.image.total_variation (mpia_sig))
-    varmpi = [var for var in slim.get_variables_to_restore() if 'mpi_a' in var.name ]
+    #loss2 += tva * tf.reduce_mean(l0SplitProx(mpia_sig,beta))
+    train_op = optimizer.minimize(loss2)
+    #varmpi = [var for var in slim.get_variables_to_restore() if 'mpi_a' in var.name ]
     #print("var",varmpi)
-    train_op = slim.learning.create_train_op(loss2,optimizer,variables_to_train=varmpi)
+    #train_op = slim.learning.create_train_op(loss2,optimizer,variables_to_train=varmpi)
     #train_op = slim.learning.create_train_op(loss2,optimizer)
-    train_op0 = slim.learning.create_train_op(loss,optimizer)
+    #train_op0 = slim.learning.create_train_op(loss,optimizer)
 
 
 
     image_out = tf.clip_by_value(img_out0,0.0,1.0)
     a_long = tf.reshape(mpia_sig,(1,num_mpi*sub_sam*bh,bw,1))
     c0_long = tf.reshape(mpic0_sig,(1,num_mpi*sub_sam*bh,bw,3))
+    p1_long = tf.reshape(psv_mpi[1],(1,num_mpi*sub_sam*bh,bw,3))
+    p2_long = tf.reshape(psv_mpi[2],(1,num_mpi*sub_sam*bh,bw,3))
     #c0_long = tf.reshape(grad[0],(1,num_mpi*sub_sam*bh,bw,4))
     c_long = tf.reshape(mpic_sig,(1,num_mpi*sub_sam*bh,bw,3))
     blue = np.array([0.47,0.77,0.93]).reshape((1,1,1,3)) * tf.cast(a_long<0.01,tf.float32)
@@ -430,6 +473,8 @@ def train_Alpha(sfm):
                 tf.compat.v1.summary.image("post1/o_color",c_long),
                 tf.compat.v1.summary.image("post1/o_color0",c0_long),
                 tf.compat.v1.summary.image("post1/o_acolor",blue+red),
+                tf.compat.v1.summary.image("post2/p1",p1_long),
+                tf.compat.v1.summary.image("post2/p2",p2_long),
                 ])
 
     config = ConfigProto()
@@ -467,54 +512,14 @@ def train_Alpha(sfm):
     sess.run(make_psv)
     print("make PSV")
 
+    #sess.run(mpic.assign(mean))
+    #print("assign PSV")
     los = 0
     n = num_mpi//20
     for i in range(FLAGS.epoch + 3):
       rr = np.zeros((num_mpi,1,1,1))
-
-      """
-      ii = i//100 
-      if i>700 and i<1000:
-        rr[26-ii] +=-7 * (i-ii*100)/100 #18
-        rr[31-ii] +=-7 * (i-ii*100)/100 #23
-        rr[33-ii] +=-7 * (i-ii*100)/100 #25
-
-      ii = i//100 
-      if i>200 and i<300:
-        rr[::4] = rr[::4]+4 * (i-ii*100)/100
-      if i>300 and i<400:
-        rr[1::4] = rr[1::4]+4 * (i-ii*100)/100
-      if i>400 and i<500:
-        rr[2::4] = rr[::4]+4 * (i-ii*100)/100
-      if i>500 and i<600:
-        rr[3::4] = rr[1::4]+4 * (i-ii*100)/100
-      if i>600 and i<700:
-        rr[::4] = rr[::4]-6 * (i-ii*100)/100
-      if i>700 and i<800:
-        rr[1::4] = rr[1::4]-6 * (i-ii*100)/100
-      if i>800 and i<900:
-        rr[2::4] = rr[::4]-6 * (i-ii*100)/100
-      if i>900 and i<1000:
-        rr[3::4] = rr[1::4]-6 * (i-ii*100)/100
-
-      if i<1100 and i>200:
-        ii = i//100 
-        f = 1 #ii/20
-        #Sub Back2Front
-        jj = num_mpi-1-ii*n
-        rr[jj:jj+n] = -4*f * (i-ii*100)/100
-        #rr[jj:jj+n] = -6 * (1.1+ii - i/100)
-        #Plus Front2Back
-        jj = ii*n
-        #rr[jj:jj+n] = 4 *f* (i-ii*100)/100
-        #sub Front2Back
-        rr[jj:jj+n] = -4 *f* (i-ii*100)/100
-
-      elif i<1300:
-        rr = rr+4 * (i-ii*100)/100
-      """
       feedlis = {iter:i,ratio:rr}
-      if i%3>0:
+      if i%10>0:
         _,los = sess.run([train_op,loss],feed_dict=feedlis)
       else:
         _,los = sess.run([train_op0,loss],feed_dict=feedlis)
@@ -548,7 +553,7 @@ def predict(sfm):
 
 
     #testset = tf.data.TFRecordDataset(["datasets/" + FLAGS.dataset + "/" + FLAGS.input +".test"])
-    localpp = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + FLAGS.dataset + "/" + FLAGS.input + ".test"
+    localpp = "/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + FLAGS.dataset + "/" + FLAGS.input + ".test"
     testset = tf.data.TFRecordDataset([localpp])
     testset = testset.map(parser).repeat().batch(1).make_one_shot_iterator()
     features = testset.get_next()
@@ -595,12 +600,13 @@ def predict(sfm):
     ckpt = tf.train.latest_checkpoint(localpp )
     saver.restore(sess, ckpt)
 
-    webpath = "webpath/"  #"/var/www/html/orbiter/"
+    webpath = "webpath/"  
+    #webpath = "/var/www/html/suttisak/data/"
     if not os.path.exists(webpath + FLAGS.dataset):
         os.system("mkdir " + webpath + FLAGS.dataset)
 
 
-    if True:  # make sample picture and video
+    if False:  # make sample picture and video
 
         for i in range(0,300,1):
           #feed = sess.run(features)
@@ -653,7 +659,7 @@ def predict(sfm):
         fo.write(" ".join([str(x) for x in np.nditer(ref_t)]) + "\n")
 
       #generateWebGL(webpath + FLAGS.dataset+ "/index.html", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py)
-      generateConfigGL(webpath + FLAGS.dataset+ "/config.js", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py,FLAGS.offset)
+      generateConfigGL(webpath + FLAGS.dataset+ "/config.js", sfm.w, sfm.h, getPlanes(sfm),namelist,sub_sam, sfm.ref_fx, sfm.ref_px, sfm.ref_py,FLAGS.scale,FLAGS.offset)
 
 
 def main(argv):

@@ -115,12 +115,14 @@ def generateDeepview():
   def _int64_feature(value):
     return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
 
-  camera = readCameraDeepview("/home2/suttisak/datasets/spaces_dataset/data/800/" + FLAGS.dataset +'/', FLAGS.new_height, FLAGS.new_width)
+  #camera = readCameraDeepview("/home2/suttisak/datasets/spaces_dataset/data/800/" + FLAGS.dataset +'/', FLAGS.new_height, FLAGS.new_width)
+  #resize_folder = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + FLAGS.dataset + "/"
 
-  resize_folder = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + FLAGS.dataset + "/"
+  camera = readCameraDeepview("/home2/suttisak/datasets/spaces_dataset/data/2k/" + FLAGS.dataset +'/', FLAGS.new_height, FLAGS.new_width)
+  resize_folder = "/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + FLAGS.dataset + "/"
   if not os.path.exists(resize_folder):
       os.system("mkdir " + resize_folder)
-  imgFolder = "/home2/suttisak/datasets/spaces_dataset/data/800/" + FLAGS.dataset + '/'
+  imgFolder = "/home2/suttisak/datasets/spaces_dataset/data/2k/" + FLAGS.dataset + '/'
 
   resize_folder += "img/"
   if not FLAGS.skipResize:
@@ -138,7 +140,7 @@ def generateDeepview():
                 img = cv.resize(img,(FLAGS.new_width, FLAGS.new_height), interpolation=cv.INTER_AREA)
                 cv.imwrite(resize_folder +'time%02d' % (time) +'-' + 'cam_%02d' %(num)+'.png',img)
   
-  with tf.python_io.TFRecordWriter("/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + FLAGS.dataset + "/" + FLAGS.output + ".train") as tfrecord_writer:
+  with tf.python_io.TFRecordWriter("/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + FLAGS.dataset + "/" + FLAGS.output + ".train") as tfrecord_writer:
     with tf.Graph().as_default():
       im0 = tf.compat.v1.placeholder(dtype=tf.uint8)
       encoded0 = tf.image.encode_png(im0)
@@ -152,7 +154,7 @@ def generateDeepview():
         #pp += [1,2,4,6,8,12,9,13,14,15]
         pp += [i for i in range(16)]
 
-        for i0 in list(range(14)): #[2,9,0]:#range(6): #[0,4,5,10,11,13]:
+        for i0 in [0]:#list(range(14)): #[2,9,0]:#range(6): #[0,4,5,10,11,13]:
           for p in pp:
             name = 'time%02d-cam_%02d' % (i0,p)
             cam = camera[name]
@@ -179,7 +181,7 @@ def generateDeepview():
                 'principalPoint1':f1(cam['cy'])}))
             tfrecord_writer.write(example.SerializeToString())
 
-  with tf.python_io.TFRecordWriter("/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + FLAGS.dataset + "/" + FLAGS.output + ".test") as tfrecord_writer:
+  with tf.python_io.TFRecordWriter("/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + FLAGS.dataset + "/" + FLAGS.output + ".test") as tfrecord_writer:
     scams = sorted(camera.items(), key=lambda x: x[0])
     n = 20
     for i in range(len(scams)-1):
@@ -198,8 +200,8 @@ def generateDeepview():
           }))
         tfrecord_writer.write(example.SerializeToString())
 
-  if False:
-    file1 = open("/home2/suttisak/datasets/spaces_dataset/data/resize_800/"+ FLAGS.dataset +"/planes.txt","w")
+  if True:
+    file1 = open("/home2/suttisak/datasets/spaces_dataset/data/2k/"+ FLAGS.dataset +"/planes.txt","w")
     file1.write("1.0 20.0\n")
     file1.close
 

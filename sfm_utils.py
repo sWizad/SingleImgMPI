@@ -160,7 +160,8 @@ class SfMData:
 
     if self.dmin < 0 or self.dmax < 0:
       #with open("/home/heisenberg/dataset/" + dataset + "/planes.txt", "r") as fi:
-      with open("/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/planes.txt", "r") as fi:
+      #with open("/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/planes.txt", "r") as fi:
+      with open("/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + dataset + "/planes.txt", "r") as fi:
         self.dmin, self.dmax = [float(x) for x in fi.readline().split(" ")]
 
     #self.w = int(self.ow * scale)
@@ -196,12 +197,14 @@ class SfMData:
 
   def readDeepview(self, dataset, ref_img):
       #path1  = '/home/heisenberg/dataset/' + dataset +'/image/'
-      path1  = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/img/"
+      #path1  = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/img/"
+      path1  = "/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + dataset + "/img/"
       resize_img = plt.imread(path1 + os.listdir(path1)[0])
       self.oh = resize_img.shape[0]
       self.ow = resize_img.shape[1]
       #path2  = '/home/heisenberg/dataset/' + dataset +'/'
-      path2 = "/home2/suttisak/datasets/spaces_dataset/data/800/" + dataset + "/"
+      #path2 = "/home2/suttisak/datasets/spaces_dataset/data/800/" + dataset + "/"
+      path2 = "/home2/suttisak/datasets/spaces_dataset/data/2k/" + dataset + "/"
       camera = readCameraDeepview(path2, self.oh, self.ow)
       found = 0
       for name, cam_info in camera.items():

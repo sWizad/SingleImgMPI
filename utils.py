@@ -45,11 +45,12 @@ def colored_hook(home_dir):
     print(colorize("%s: %s" % (type_.__name__, value), "cyan"))
   return hook
 
-def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py,offset=0):
+def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py,scale=1.0,offset=0):
   print("Generating WebGL viewer")
   fo = open(outputFile, "w")
 
   replacer = {}
+  replacer["SCALE"] = scale;
   replacer["WIDTH"] = w;
   replacer["HEIGHT"] = h;
   replacer["PLANES"] = "[" + ",".join([str(x) for x in planes]) + "]"
@@ -64,17 +65,18 @@ def generateConfigGL(outputFile, w, h, planes,namelist, subplane, f, px, py,offs
 
   
   st = """
+  const scale = {SCALE};
   const w = {WIDTH};
   const h = {HEIGHT};
   const nSubPlanes = {nSUBPLANES};
 
   const planes = {PLANES};
-  const f = {F};
+  const f = {F} * scale;
   var names = {NAMES};
   var nMpis = names.length;
 
-  const py = {PY};
-  const px = {PX};
+  const py = {PY} * scale;
+  const px = {PX} * scale;
   const invz = 0;
 
   const offset = {OFFSET};
@@ -251,7 +253,8 @@ def load_data(dataset,input,h_w,batch=1,is_shuff=False):
     return fs
 
   #localpp = "datasets/" + dataset + "/" + input + ".train"
-  localpp = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/" + input + ".train"
+  #localpp = "/home2/suttisak/datasets/spaces_dataset/data/resize_800/" + dataset + "/" + input + ".train"
+  localpp = "/home2/suttisak/datasets/spaces_dataset/data/resize_2k/" + dataset + "/" + input + ".train"
   dataset = tf.data.TFRecordDataset([localpp])
   dataset = dataset.map(parser)
   if(is_shuff):  dataset = dataset.shuffle(5)
@@ -307,14 +310,22 @@ def getPlanes(sfm,invz=True):
 def HomoWarp(sfm, features, ref_feat,i=0, center=0):
   cxys = []
   planes = getPlanes(sfm)
-  x, y = tf.meshgrid(list(range(sfm.w)), list(range(sfm.h)))
-  x, y = tf.cast(x, tf.float32), tf.cast(y, tf.float32)
+  if not hasattr(sfm,'sw') :
+    x, y = tf.meshgrid(list(range(sfm.w)), list(range(sfm.h)))
+    x, y = tf.cast(x, tf.float32), tf.cast(y, tf.float32)
+  else:
+    x, y = tf.meshgrid(list(range(sfm.sw)), list(range(sfm.sh)))
+    x, y = tf.cast(x, tf.float32), tf.cast(y, tf.float32)
+    if not isinstance(center, int):
+      x += center[0,:,:,0]
+      y += center[0,:,:,1]
   coords = tf.stack([x, y, tf.ones_like(x)], 2)
 
   for v in planes:
     H = computeHomography(sfm, features, ref_feat, v,i=i)
     newCoords = tf.matmul(coords, H, transpose_b=True)
     cxy = tf.expand_dims(newCoords[:,:,:2]/newCoords[:,:,2:3],0)+ sfm.offset
+    #cxy -= np.array([[[100,200]]])#center
     cxys.append(cxy)
 
   warp = tf.concat(cxys,0)
